@@ -1,0 +1,62 @@
+# ── Secrets: never commit ──────────────────────────────
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+*.mobileprovision
+secrets.h
+secrets.*.h
+provisioning.local.*
+*.local.json
+mock-keys/
+keys/
+
+# ── OS / editors ──────────────────────────────────────
+.DS_Store
+Thumbs.db
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.swp
+
+# ── Firmware (PlatformIO / Arduino) ───────────────────
+.pio/
+build/
+*.bin
+*.elf
+*.map
+
+# ── Android ───────────────────────────────────────────
+.gradle/
+local.properties
+captures/
+*.apk
+*.aab
+.externalNativeBuild/
+.cxx/
+
+# ── iOS / Xcode ───────────────────────────────────────
+xcuserdata/
+DerivedData/
+*.xcuserstate
+*.ipa
+
+# ── Node / web ────────────────────────────────────────
+node_modules/
+dist/
+.next/
+.vercel/
+coverage/
+
+# ── Supabase local ────────────────────────────────────
+supabase/.temp/
+supabase/.branches/
+
+# ── Flash backups of the real gate: keep these off the repo ──
+*.flash
+flash-backup*
