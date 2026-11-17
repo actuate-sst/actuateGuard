@@ -1,0 +1,8 @@
+# Security-critical paths: changes need @shreyansh-malviya's approval.
+/firmware/src/auth/     @shreyansh-malviya
+/firmware/src/relay*    @shreyansh-malviya
+/backend/signer/        @shreyansh-malviya
+/tools/keygen/          @shreyansh-malviya
+/.github/               @shreyansh-malviya
+/SECURITY.md            @shreyansh-malviya
+/docs/design.md         @shreyansh-malviya
