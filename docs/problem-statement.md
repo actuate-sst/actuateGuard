@@ -84,7 +84,7 @@ Step-by-step version: [live-board.md](live-board.md).
 
 ## Process
 
-- Write a design doc first ([design.md](design.md)). Shreyansh reviews it before you build.
+- Build from the design doc ([design.md](design.md)), step by step. If the design needs to change, change the doc in a PR first, then the code.
 - `main` is protected: PR plus approval, no direct pushes.
 - Changes to the signer, grant verification, relay control, and key handling (gate, app, keygen and provisioning tools) need Shreyansh's review (CODEOWNERS).
 - The mock backend runs on a throwaway account, and preview builds get no production secrets.
@@ -92,7 +92,7 @@ Step-by-step version: [live-board.md](live-board.md).
 
 ## Deliverables
 
-1. Design doc ([design.md](design.md)).
+1. Design doc ([design.md](design.md)). Draft in place; settle the open decisions in §13 before building.
 2. Working end-to-end mock on the gate board, including the access log.
 3. Threat list ([threats.md](threats.md)): how you would attack your own system (replay, relay, clone, flash dump, stolen phone, expired grant, tampered log).
 4. Cutover checklist for Phase B ([cutover.md](cutover.md)).
@@ -100,15 +100,3 @@ Step-by-step version: [live-board.md](live-board.md).
 ## Out of scope
 
 Production keys, flashing the live gate with real keys, and burning secure boot and flash encryption (Shreyansh, Phase B).
-
----
-
-### Changes from the original draft
-
-- **Current state:** removed "it is replayable". The current system uses single-use challenges, so recordings can't be replayed. Its real flaws are listed instead.
-- **Plan:** Phase A happens in this repo on `main` via PRs (the `mock/door-auth` branch was for the old repo). Phase C says the dashboard *and backend* auto-deploy; a phone app can't, so its builds come from CI and are released by hand.
-- **Gate / hard rules:** "no secrets on the ESP" became "no secret that can open the gate". The log token and WiFi password have to live on the ESP; they're stored in config, never in the firmware image.
-- **Signed grants:** "baked-in signer public key" became "from its config", matching the config-driven rule.
-- **Offline rule:** added the exception for no trusted time (fails closed).
-- **Onboarding:** stated that guests use the app too.
-- **Process:** spelled out which code counts as "key handling" for CODEOWNERS, and added relay control.
