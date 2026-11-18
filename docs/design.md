@@ -1,8 +1,10 @@
 # Gate Access v2: Design
 
-**Status:** Draft for review · **Reviewer:** @shreyansh-malviya · **Last updated:** 2026-11-18
+**Status:** Draft, open decisions in §13 · **Author:** @shreyansh-malviya · **Last updated:** 2026-11-18
 
-This replaces the current gate login, where everyone types in one shared HMAC key. The new system gives each person their own revocable access using signed grants, supports temporary guest access, and keeps an access log. Your review is needed before any code is written; the open decisions are in §13.
+This replaces the current gate login, where everyone types in one shared HMAC key. The new system gives each person their own revocable access using signed grants, supports temporary guest access, and keeps an access log.
+
+**How to use this doc:** it's the build spec. Implement it section by section, as written. If something turns out to be wrong or impossible, change this doc in a PR **first**, then the code. The code should never quietly drift away from the design.
 
 ---
 
@@ -373,7 +375,7 @@ The step-by-step version is the separate cutover-checklist deliverable.
 
 ---
 
-## 13. Open decisions (for Shreyansh)
+## 13. Open decisions
 
 | # | Decision | Options | Proposal |
 |---|---|---|---|
