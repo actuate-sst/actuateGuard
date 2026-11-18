@@ -187,7 +187,7 @@ The full threat list is a Phase A deliverable: [docs/threats.md](docs/threats.md
 
 ## Getting started
 
-1. Read [docs/problem-statement.md](docs/problem-statement.md) (what we're building and the rules), then [docs/design.md](docs/design.md) (how). The design doc is the source of truth for technical details.
+1. Read [docs/problem-statement.md](docs/problem-statement.md) (what we're building and the rules), then [docs/design.md](docs/design.md) (how). The design doc is the build spec: follow it section by section. If you find something wrong in it, fix the doc in a PR first, then the code.
 2. Read [docs/live-board.md](docs/live-board.md) **before touching the real gate board.**
 3. Pick an [open issue](../../issues). Issues labelled `good first issue` (mostly photos and docs) are a good warm-up.
 4. Branch from `main`, open a PR, and get a review. `main` is protected.
@@ -223,4 +223,7 @@ Found a security problem? See [SECURITY.md](SECURITY.md). Please don't open a pu
 
 ## Team
 
-Robotics club, `actuate-sst`. Design and security review: @shreyansh-malviya.
+Built by the robotics club (`actuate-sst`).
+
+- **Project lead, architecture and building:** @shreyansh-malviya. Also owns review of the security-critical paths (see [CODEOWNERS](.github/CODEOWNERS)) and runs the Phase B cutover.
+- **Contributors:** the robotics club team. Add yourself here in your first PR.
