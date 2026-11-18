@@ -33,7 +33,7 @@ So the ESP32 just **presses that button for us**:
 2. When a phone passes the check, the ESP32 drives **GPIO 13** to switch the relay on. COM and NO connect, which is exactly what pressing the button does.
 3. After about 3 seconds the relay switches off again, like letting go of the button.
 
-![Gate controller schematic](hardware/schematic.svg)
+![Gate controller wiring](hardware/wiring.png)
 
 **Why it's a nice hack**
 - **No changes to the lock.** The relay acts as a second, invisible exit button.
@@ -42,7 +42,7 @@ So the ESP32 just **presses that button for us**:
 
 **The one rule this hack imposes:** the relay must **stay off while the ESP32 boots or resets**. An active-low relay module (on when its input is LOW) that sees LOW during boot looks to the lock like someone *holding* the exit button. The firmware must set the "off" level before it enables the pin, and must cap how long the relay can stay on. See [design.md §8.2](docs/design.md#82-relay-safety-avoid-repeating-the-old-firmwares-bugs).
 
-The schematic is generated from code with [schemdraw](https://schemdraw.readthedocs.io/): edit [`hardware/schematic.py`](hardware/schematic.py) and run `python hardware/schematic.py`. Parts list and pin notes are in [hardware/README.md](hardware/README.md).
+The wiring diagram was drawn in [Wokwi](https://wokwi.com). Parts list and pin notes are in [hardware/README.md](hardware/README.md).
 
 ---
 
@@ -214,7 +214,7 @@ Found a security problem? See [SECURITY.md](SECURITY.md). Please don't open a pu
 | | |
 |---|---|
 | *📷 Gate board on the bench* | *📷 Relay module close-up* |
-| *🖼️ Breadboard-style wiring view (e.g. Fritzing), optional* | *📱 App screenshots* |
+| *📷 Exit button and relay wiring on the bench* | *📱 App screenshots* |
 | *🖥️ Dashboard screenshots* | |
 
 **Never post photos of the installed gate:** not its location, the outside of the gate, the enclosure in place, the lock model, or the wiring where it's mounted. This is a public repo, and those photos would show an attacker where to work. See [docs/photos/README.md](docs/photos/README.md).

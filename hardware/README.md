@@ -2,18 +2,11 @@
 
 How the gate controller is wired. The explanation of the exit-button hack is in the [main README](../README.md#the-hardware-a-small-hack).
 
-## Schematic
+## Wiring diagram
 
-![Gate controller schematic](schematic.svg)
+![Gate controller wiring](wiring.png)
 
-Generated from [`schematic.py`](schematic.py) with [schemdraw](https://schemdraw.readthedocs.io/):
-
-```bash
-pip install schemdraw==0.19
-python hardware/schematic.py        # rewrites hardware/schematic.svg
-```
-
-Edit the script and regenerate; don't edit the SVG by hand.
+Drawn in [Wokwi](https://wokwi.com). Wire colours: red = 5 V, black = GND, yellow = GPIO 13 → relay IN, orange = relay COM, purple = relay NO.
 
 ## Parts (bill of materials)
 
@@ -34,7 +27,7 @@ Edit the script and regenerate; don't edit the SVG by hand.
 - The inside exit button and the mechanical key must work without the ESP32.
 
 ## To confirm on the real board
-The schematic shows the current setup as described. Please check these against the actual wiring and fix `schematic.py` if anything differs:
+The diagram shows the current setup as described. Please check these against the actual wiring and update the diagram if anything differs:
 - [ ] How the ESP32 is powered (USB adapter? from the lock's supply through a converter?)
 - [ ] Whether the relay module's VCC comes from VIN (5 V) or 3V3
 - [ ] That the relay contacts really are COM + NO across the exit-button terminals
