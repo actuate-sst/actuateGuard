@@ -175,10 +175,14 @@ Step 3 is about 250 bytes. The phone asks for an ATT MTU of 517 and falls back t
 | `issued_at` | 4 |
 | `gate_id` | 4 |
 | `count` | 2 |
-| `grant_ids` | 16 × count |
+| `entries` | 17 × count: `type` (1) ‖ `id` (16). `type 0x01` = one `grant_id`. `type 0x02` = a `user_id`, which blocks **every** grant for that user. |
 | `signer_sig` | 64, over `"AGv1-RVK" ‖ everything above` |
 
-Expired grants are dropped from the list, so it stays small (a few hundred bytes).
+**Why there are user entries:** grants refresh at half their lifetime, so a person usually holds **two valid grants** at once (old and new). Revoking "the grant" would leave the older one working. So:
+- **Revoking a person** adds a `user_id` entry.
+- **Revoking one phone** adds every unexpired `grant_id` the signer issued to that phone. The signer knows them all.
+
+**The list only grows while it matters.** The signer drops an entry only once nothing it covers can still be valid: a `grant_id` after that grant's `valid_until`, a `user_id` once all of that user's grants have expired. It never drops a live entry because the API asks. Restoring someone needs a fresh admin-passkey approval (§7.1), which issues new grants. The list stays small (a few hundred bytes).
 
 ### 6.4 Log event (ESP → backend)
 
@@ -260,7 +264,7 @@ From then on the signer issues grants for that phone **by itself**, each with `v
    3. clock is valid (RTC set, year ≥ 2026) → `CLOCK_INVALID`
    4. `valid_from ≤ now ≤ valid_until` → `NOT_YET_VALID` / `EXPIRED`
    5. mock mode only: `valid_until − valid_from ≤ 3600` → `GRANT_TOO_LONG`
-   6. `grant_id` is not in the revocation list → `REVOKED`
+   6. neither the `grant_id` nor the `user_id` is on the revocation list → `REVOKED`
    7. signer signature on the grant → `BAD_GRANT_SIG`
    8. phone signature on `gate_id ‖ nonce ‖ grant_id`, using the grant's `phone_pubkey` → `BAD_PHONE_SIG`
    9. open the relay → `OK`
@@ -270,7 +274,7 @@ From then on the signer issues grants for that phone **by itself**, each with `v
 The admin creates a **guest invite**, and the guest enrolls with the app the same way, including the fingerprint check and the passkey approval. The approval is `kind = guest` with an `approved_until` of hours or days instead of a semester. No other mechanism is needed. Guests without a smartphone are out of scope; they use the physical key or are let in by a member.
 
 ### 7.4 Revocation
-- **Removing someone:** the admin clicks revoke. The backend marks the user, stops refreshing their grant, adds the grant to the revocation list and bumps its version. The signer re-signs the list.
+- **Removing someone:** the admin clicks revoke and confirms with their passkey. The signer marks the approval revoked (so it issues no more grants), adds a `user_id` entry (whole person) or the phone's unexpired `grant_id`s (one phone), bumps the version and re-signs the list. The API can *request* revocations, but only the signer writes the list.
 - **Gate update:** the gate pulls the list over HTTPS every N minutes (proposed 5) and keeps the newest valid one in NVS.
 - **Offline limit:** if the gate is offline, a revoked grant still works until the earlier of (a) the gate's next successful pull or (b) the grant's `valid_until`. **Short member grants that refresh automatically put a hard ceiling on this**: with 7-day grants, a revoked member is locked out within 7 days at most, even if the gate never comes back online. The length is decision D5.
 
@@ -350,6 +354,7 @@ A build flag `GATE_MODE_MOCK` turns on the ≤ 1-hour grant limit and a "MOCK" s
 | **Expired grant** | Rejected offline by the RTC check. |
 | **Tampered log** | The token can only append. `seq` gaps reveal deleted or blocked events. The DB doesn't allow updates. |
 | **Old revocation list replayed** | Rejected: the version must always increase. |
+| **Revoked person uses their older grant** | Blocked: revoking a person adds their `user_id`, which covers every grant they hold, not just the newest. |
 | **Fake backend / DNS spoof** | TLS checked against the stored CA certificate. The revocation list is also signed by the signer, so a fake server can't remove a revocation. |
 | **Bluetooth DoS** (hold the connection, flood bad attempts) | Idle timeout plus per-connection rate limit. Remaining effect is a nuisance only; the physical key still works. |
 | **Relay attack** (attacker passes messages between a member's phone and the gate) | ⚠️ **Not fully solvable with these rules.** The gate can't prove its identity without holding a private key, and that's forbidden. Mitigations: decision D2 (require the phone to be unlocked or recently used, or a tap in the app), binding signatures to `gate_id`, and short grants. Recorded as an accepted residual risk. |
