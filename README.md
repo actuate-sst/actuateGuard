@@ -181,13 +181,13 @@ The full threat list is a Phase A deliverable: [docs/threats.md](docs/threats.md
 | [`dashboard/`](dashboard/) | Admin web dashboard: approve, revoke, guest access, logs |
 | [`tools/`](tools/) | Mock key generation, ESP provisioning, grant inspector |
 | [`hardware/`](hardware/) | Parts list and wiring diagram |
-| [`docs/`](docs/) | Design doc, threat list, cutover checklist, live-board rules, photos |
+| [`docs/`](docs/) | Problem statement, design doc, threat list, cutover checklist, live-board rules, photos |
 
 ---
 
 ## Getting started
 
-1. Read [docs/design.md](docs/design.md). It's the source of truth.
+1. Read [docs/problem-statement.md](docs/problem-statement.md) (what we're building and the rules), then [docs/design.md](docs/design.md) (how). The design doc is the source of truth for technical details.
 2. Read [docs/live-board.md](docs/live-board.md) **before touching the real gate board.**
 3. Pick an [open issue](../../issues). Issues labelled `good first issue` (mostly photos and docs) are a good warm-up.
 4. Branch from `main`, open a PR, and get a review. `main` is protected.
