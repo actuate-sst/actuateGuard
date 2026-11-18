@@ -3,6 +3,9 @@
 /firmware/src/relay*    @shreyansh-malviya
 /backend/signer/        @shreyansh-malviya
 /tools/keygen/          @shreyansh-malviya
+/tools/provision/       @shreyansh-malviya
+# TODO once D1 is decided: add the app's key-handling folder, e.g. /app/android/**/crypto/
+/docs/problem-statement.md @shreyansh-malviya
 /.github/               @shreyansh-malviya
 /SECURITY.md            @shreyansh-malviya
 /docs/design.md         @shreyansh-malviya
