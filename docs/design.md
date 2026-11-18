@@ -333,6 +333,12 @@ firmware/
 ### 8.3 Modes
 A build flag `GATE_MODE_MOCK` turns on the ≤ 1-hour grant limit and a "MOCK" serial banner. Production builds leave it off. This is a build setting, not a code change. There are **no serial commands that print or change keys.**
 
+### 8.4 Firmware updates and builds
+- **No OTA in Phase A.** Firmware is flashed over USB during supervised sessions only ([live-board.md](live-board.md)).
+- **If OTA is added later,** it only accepts images signed for **ESP32 secure boot v2**, and the gate pulls updates (no open ports). Firmware is **never auto-deployed** from CI.
+- **Production builds are reproducible:** built from a **signed git tag**, with PlatformIO library versions pinned exactly (D7). The binary's SHA-256 is recorded in [cutover.md](cutover.md) before flashing.
+- **Phase B hardening:** turn on secure boot v2 and flash encryption, **disable JTAG**, and set the ROM download mode to **secure**, so the USB port can't be used to read the flash or load unsigned firmware.
+
 ---
 
 ## 9. Phone app
@@ -389,7 +395,10 @@ Phase B should change only the items below. If anything else needs changing, tha
 | WiFi | ESP NVS |
 | Backend project | Moved or recreated in the club account; environment secrets set there |
 | `GATE_MODE_MOCK` | Off for the production build |
+| Admin passkey public keys | Signer config: remove the mock admin, pin the production admins' passkeys |
 | Existing grants | All mock grants become invalid automatically, because the signer key changed |
+| Firmware build | Built from a signed tag; SHA-256 recorded in cutover.md (§8.4) |
+| ESP32 hardening | Secure boot v2, flash encryption, JTAG disabled, secure download mode (§8.4) |
 
 The step-by-step version is the separate cutover-checklist deliverable.
 
@@ -410,6 +419,7 @@ The step-by-step version is the separate cutover-checklist deliverable.
 - **Visibility:** the repo is public, which on the free plan also allows branch protection, required reviews, CODEOWNERS enforcement and secret-scanning push protection.
 - **`main`:** protected (PR plus one approval, no force-push). Changes to `firmware/src/auth/`, `backend/signer/` and `tools/keygen` need @shreyansh-malviya's approval.
 - **CI on every PR:** secret scan (gitleaks plus a check for hard-coded 256-bit keys), firmware compile, app build and lint, dependency review.
+- **Deployment (Phase C):** the backend and dashboard auto-deploy from `main`. Preview deploys get no production secrets. App builds are produced by CI and **released manually**. Firmware is **never** auto-deployed: it's flashed by hand, or later through signed OTA only (§8.4).
 - **Never committed:** keys, tokens, WiFi details, `provisioning.local.*`, any `.env`. A `.gitignore` is in place from the first commit.
 - **Old code:** nothing is imported from older repos with its git history. Copy individual source files only, after checking them.
 
