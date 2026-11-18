@@ -16,5 +16,10 @@ Must cover at least:
 - [ ] Bluetooth denial of service (holding the connection, flooding bad attempts)
 - [ ] Power cut / brownout / crash loop (does the relay fail safe?)
 - [ ] Leaked mock key / leaked log token / leaked signer key
+- [ ] Hacked backend or database (can it mint access without an admin passkey?)
+- [ ] Stolen admin passkey device
+- [ ] Intercepted invite code (enrollment hijack)
+- [ ] Revoked person still holding an older, unexpired grant
+- [ ] Gate's internet deliberately blocked to dodge a revocation
 
 Start from [design.md §10](design.md#10-security-properties-and-known-residual-risks).
