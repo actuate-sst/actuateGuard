@@ -8,7 +8,7 @@ Photos and screenshots used in the README and docs.
 |---|---|---|
 | `board-bench.jpg` | Gate controller on the bench (ESP32 + relay + RTC), top-down, good light | "Photo: gate board on the bench" |
 | `relay-closeup.jpg` | Relay module showing its labelling (active-low/high jumper, if any) | "Photo: relay module close-up" |
-| `wiring-diagram.png` | **Drawn** wiring diagram (Fritzing / KiCad / draw.io / neat hand drawing) | "Photo: wiring diagram" |
+| `wiring-breadboard.png` | Optional breadboard-style view (e.g. Fritzing) to go with the schematic in `hardware/schematic.svg` | "Photo: breadboard wiring view" |
 | `app-*.png` | App screenshots: onboarding, unlock, denied | "Screenshots: phone app" (after the app exists) |
 | `dashboard-*.png` | Dashboard screenshots: members, guests, logs | "Screenshots: dashboard" (after it exists) |
 
