@@ -5,7 +5,7 @@ Secure, per-person access for the robotics club gate. Phones open the gate over 
 > **Status: Phase A (mock build).** Everything here uses throwaway keys and a throwaway backend. Nothing in this repo can open the real gate.
 
 <!-- PHOTO: hero image of the gate board on the bench → docs/photos/board-bench.jpg (see issue "Photo: gate board on the bench") -->
-<p align="center"><i>📷 Photo coming soon: the gate controller on the bench</i></p>
+<p align="center"><i>Photo coming soon: the gate controller on the door</i></p>
 
 ---
 
@@ -21,7 +21,28 @@ Bluetooth signal strength only *starts* the check. Being close to the gate alone
 
 Full details: **[docs/design.md](docs/design.md)**.
 
-<!-- PHOTO: system diagram or wiring diagram → docs/photos/wiring-diagram.png (see issue "Photo: wiring diagram") -->
+---
+
+## The hardware: a small hack
+
+We didn't replace or open up the door lock. The lock's controller already has an **electronic exit button**: the push button you press to get out. Pressing it briefly connects two wires, and the controller releases the lock.
+
+So the ESP32 just **presses that button for us**:
+
+1. A **relay module** sits behind the ESP32. Its **COM** and **NO** contacts are wired **in parallel** across the exit button's two wires.
+2. When a phone passes the check, the ESP32 drives **GPIO 13** to switch the relay on. COM and NO connect, which is exactly what pressing the button does.
+3. After about 3 seconds the relay switches off again, like letting go of the button.
+
+![Gate controller schematic](hardware/schematic.svg)
+
+**Why it's a nice hack**
+- **No changes to the lock.** The relay acts as a second, invisible exit button.
+- **The original button still works.** It's wired in parallel, so pressing it does the same thing as before.
+- **If the ESP32 or relay dies, nothing opens.** An unpowered relay leaves NO open, which is the same as nobody pressing the button. The inside button and the mechanical key still work.
+
+**The one rule this hack imposes:** the relay must **stay off while the ESP32 boots or resets**. An active-low relay module (on when its input is LOW) that sees LOW during boot looks to the lock like someone *holding* the exit button. The firmware must set the "off" level before it enables the pin, and must cap how long the relay can stay on. See [design.md §8.2](docs/design.md#82-relay-safety-avoid-repeating-the-old-firmwares-bugs).
+
+The schematic is generated from code with [schemdraw](https://schemdraw.readthedocs.io/): edit [`hardware/schematic.py`](hardware/schematic.py) and run `python hardware/schematic.py`. Parts list and pin notes are in [hardware/README.md](hardware/README.md).
 
 ---
 
@@ -68,7 +89,7 @@ Found a security problem? See [SECURITY.md](SECURITY.md). Please don't open a pu
 | | |
 |---|---|
 | *📷 Gate board on the bench* | *📷 Relay module close-up* |
-| *🖼️ Wiring diagram (drawn, not a photo)* | *📱 App screenshots* |
+| *🖼️ Breadboard-style wiring view (e.g. Fritzing), optional* | *📱 App screenshots* |
 | *🖥️ Dashboard screenshots* | |
 
 **Never post photos of the installed gate:** not its location, the outside of the gate, the enclosure in place, the lock model, or the wiring where it's mounted. This is a public repo, and those photos would show an attacker where to work. See [docs/photos/README.md](docs/photos/README.md).
