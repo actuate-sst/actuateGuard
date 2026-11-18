@@ -5,7 +5,7 @@ Secure, per-person access for the robotics club gate. Phones open the gate over 
 > **Status: Phase A (mock build).** Everything here uses throwaway keys and a throwaway backend. Nothing in this repo can open the real gate.
 
 <!-- PHOTO: hero image of the gate board on the bench → docs/photos/board-bench.jpg (see issue "Photo: gate board on the bench") -->
-<p align="center"><i>Photo coming soon: the gate controller on the door</i></p>
+<p align="center"><i>Photo coming soon: the gate controller on the bench</i></p>
 
 ---
 
