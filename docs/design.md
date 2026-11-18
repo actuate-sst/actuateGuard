@@ -146,7 +146,7 @@ All integers are big-endian. Times are Unix seconds as `u32` (good until 2106). 
 | `grant_id` | 16 | Random. This is what gets revoked and logged. |
 | `user_id` | 16 | UUID of the member or guest |
 | `gate_id` | 4 | The grant only works on this gate |
-| `kind` | 1 | `0x01` member, `0x02` guest, `0x03` admin-test |
+| `kind` | 1 | `0x01` member, `0x02` guest. Any other value is rejected (`BAD_FORMAT`). |
 | `valid_from` | 4 | |
 | `valid_until` | 4 | |
 | `phone_pubkey` | 65 | Uncompressed P-256 |
@@ -163,7 +163,9 @@ A grant is not secret. Copying it is useless without the phone's private key.
 | 1 | Phone → gate | `HELLO` (request challenge) |
 | 2 | Gate → phone | `nonce` (32 bytes, hardware RNG) ‖ `gate_id` (4) |
 | 3 | Phone → gate | `grant` (175) ‖ `phone_sig` (DER, ≤ 72), where `phone_sig = Sign(phone_key, "AGv1-AUTH" ‖ gate_id ‖ nonce ‖ grant_id)` |
-| 4 | Gate → phone | `result` (1) ‖ `reason` (1) |
+| 4 | Gate → phone | `result` (1): `OK`, `DENIED` or `TRY_AGAIN` |
+
+The phone only gets a **coarse result**. The detailed reason (§6.4) goes to the log, never over the air, so an attacker can't tell which part of their attempt failed. Mock builds may also send the reason, for debugging.
 
 Step 3 is about 250 bytes. The phone asks for an ATT MTU of 517 and falls back to a BLE long write. The ESP supports both.
 
@@ -262,11 +264,11 @@ From then on the signer issues grants for that phone **by itself**, each with `v
    1. format and version → `BAD_FORMAT`
    2. `gate_id` matches → `WRONG_GATE`
    3. clock is valid (RTC set, year ≥ 2026) → `CLOCK_INVALID`
-   4. `valid_from ≤ now ≤ valid_until` → `NOT_YET_VALID` / `EXPIRED`
+   4. `valid_from ≤ now ≤ valid_until`, with ±2 min drift slack → `NOT_YET_VALID` / `EXPIRED`
    5. mock mode only: `valid_until − valid_from ≤ 3600` → `GRANT_TOO_LONG`
    6. neither the `grant_id` nor the `user_id` is on the revocation list → `REVOKED`
    7. signer signature on the grant → `BAD_GRANT_SIG`
-   8. phone signature on `gate_id ‖ nonce ‖ grant_id`, using the grant's `phone_pubkey` → `BAD_PHONE_SIG`
+   8. `phone_pubkey` is a valid point on P-256 (`mbedtls_ecp_check_pubkey`), and the phone signature on `gate_id ‖ nonce ‖ grant_id` verifies with it → `BAD_PHONE_SIG`
    9. open the relay → `OK`
 5. Every outcome is logged (§6.4).
 
@@ -328,6 +330,7 @@ firmware/
 - Use a hardware watchdog. After any reset the relay starts locked.
 - Compare times with `millis()` subtraction (`now - start < duration`), never against a stored absolute time, so the ~49-day `millis()` wraparound can't cause a lockout.
 - Rate-limit **per connection** with backoff, plus an idle timeout. Don't use one global lockout that any stranger can trigger for everyone.
+- Handle **one handshake at a time**, and put a global cap on signature checks per second (e.g. 4). That bounds how much CPU a flood of well-formed fake grants can burn, without locking real users out.
 - The inside release and the mechanical key work independently of the ESP, in hardware.
 
 ### 8.3 Modes
@@ -348,6 +351,8 @@ A build flag `GATE_MODE_MOCK` turns on the ≤ 1-hour grant limit and a "MOCK" s
   - iOS: Secure Enclave via `SecKeyCreateRandomKey` with `kSecAttrTokenIDSecureEnclave`.
 - **Grant storage:** ordinary app storage (the grant isn't secret).
 - **Background unlock** behaviour depends on decision D2 and the platform (D1).
+- **Logging notice:** onboarding tells the person, before they enroll, that every gate attempt is logged with their name and the time, that logs are kept for **90 days**, and who can see them (admins). They must accept before the app generates their key.
+- **Key fingerprint:** after generating the key, the app shows the 6-digit fingerprint for the admin to compare (§7.1).
 - **Reuse from the current app:** the Android scanning, GATT connection and foreground-service code can be copied over as source files only, without git history. Replace the HMAC/shared-key parts completely. Fix the dead-code signal-strength check while porting.
 - The app should **check the gate ID** in the advertisement before connecting. This doesn't stop a relay attack, but it saves connecting to unrelated devices.
 
