@@ -55,7 +55,7 @@ flowchart LR
         API --> SIGNER
     end
 
-    DASH[Admin dashboard<br/>passkey / 2FA] --> API
+    DASH[Admin dashboard<br/>admin passkey] --> API
 
     APP <-- "BLE: challenge → grant + signature" --> ESP
     APP -- "HTTPS: enroll, fetch grant" --> API
@@ -68,10 +68,10 @@ flowchart LR
 |---|---|---|
 | ESP32 | Signer **public** key, gate ID, backend URL, CA cert. Also a WiFi password and a write-only log token, stored in NVS (see §4). | Grants signed by the signer key |
 | Phone | Its own private key (hardware-backed, can't be exported) plus its current grant (not secret) | The backend over HTTPS |
-| Signer | The signer **private** key: the most valuable secret in the system | Admin decisions recorded in the DB |
-| Backend / DB | User records, invite-code *hashes*, grants, revocations, logs | Admin login (passkey / 2FA) |
+| Signer | The signer **private** key: the most valuable secret in the system. Also the **admin passkey public keys**, pinned in its own config. | **Only** approvals signed by an admin's passkey (§7.1). It does **not** trust the API or the DB. |
+| Backend / DB | User records, invite-code *hashes*, grants, revocations, logs | Admin login (passkey) |
 
-**What the system depends on:** if the signer key is compromised, an attacker can open the gate. If anything else is compromised (a phone, the ESP's flash, the DB, the source code, the log token), the damage is limited. §10 lists exactly how.
+**What the system depends on:** two things can open the gate: the **signer key** and an **admin's passkey**. Everything else (a phone, the ESP's flash, the DB, the API, the source code, the log token) can be fully compromised without anyone gaining access. A compromised backend can at most *block* people (refuse refreshes, add revocations), not let anyone in. §10 lists exactly how.
 
 ---
 
@@ -82,8 +82,8 @@ flowchart LR
 | **Gate firmware** (ESP32) | Advertises over BLE and sends challenges. Checks grants and phone signatures offline. Drives the relay with fail-safes. Keeps a signed revocation list. Keeps time with the RTC. Buffers logs in flash and uploads them. |
 | **Phone app** | Onboards using an invite code. Generates a key pair in hardware. Fetches and refreshes grants. Answers gate challenges. |
 | **Backend API** | Enrollment, grant issue and refresh, revocation list, time endpoint, log ingestion. |
-| **Signer** | Signs grants and revocation lists, and nothing else. Kept separate from the API so the API can't read the key. |
-| **Admin dashboard** | Approve members, issue guest grants, revoke access, view and filter logs. Admin login uses a passkey or TOTP 2FA. |
+| **Signer** | Signs three things only: grants (within a valid admin approval, §7.1), revocation lists (§7.4) and time responses (§7.6). Kept separate from the API so the API can't read the key or bypass its checks. Keeps its own audit log and **alerts the admins on every new approval** (e.g. Telegram or email). |
+| **Admin dashboard** | Approve members, issue guest access, revoke access, view and filter logs. Admins log in with a **passkey only** (no TOTP fallback, which can be phished). Every approve or revoke action asks for the passkey again. |
 
 ---
 
@@ -99,7 +99,8 @@ flowchart LR
 | ESP log-upload token | Yes, low impact | ESP NVS partition (not in the firmware image) | Throwaway backend token | New token for the club backend |
 | WiFi password | Yes | ESP NVS partition | | |
 | Backend DB / service credentials | Yes | Backend environment secrets | Throwaway account | Club account |
-| Admin login | Yes | Passkey / TOTP | | |
+| Admin passkey (private key) | **Yes, critical** | The admin's own device (phone or security key), can't be exported | Mock admin's passkey | Shreyansh's (and any other admins') passkeys |
+| Admin passkey public keys | No | **Pinned in the signer's config**, not the DB, so a DB compromise can't swap them | Mock admin key | Production admin keys |
 | TLS CA certificate | No | ESP config | | |
 
 **Rule:** the firmware **image** has no secrets and no per-device config. Anything device-specific (gate ID, signer public key, backend URL, CA cert, WiFi, log token) is written into the ESP's **NVS partition** at provisioning time by a script in `tools/`, using values from a local file that is never committed.
@@ -127,7 +128,9 @@ Encoding:
 - **Signer signatures:** raw `r || s`, 64 bytes, fixed size.
 - **Phone signatures:** DER, because that's what Keystore and the Secure Enclave produce. The ESP checks them with `mbedtls_pk_verify`.
 
-**Domain separation:** every signed message starts with a fixed tag (`"AGv1-GRANT"`, `"AGv1-AUTH"`, `"AGv1-RVK"`). That way a signature made for one purpose can't be reused for another.
+**Domain separation:** every signed message starts with a fixed tag (`"AGv1-GRANT"`, `"AGv1-AUTH"`, `"AGv1-RVK"`, and `"AGv1-APPROVE"` for admin approvals). That way a signature made for one purpose can't be reused for another.
+
+**Admin passkeys** are WebAuthn credentials (P-256, ES256) on the admin's own device. The signer verifies their assertions with a standard WebAuthn library, never hand-written parsing.
 
 ---
 
@@ -216,14 +219,35 @@ sequenceDiagram
     API-->>Admin: one-time code (shown once; DB stores SHA-256(code), expires in 48 h)
     Admin-->>App: gives the code in person
     App->>App: generate P-256 key pair in Keystore / Secure Enclave
-    App->>API: code + phone_pubkey + device label
+    App->>API: code + phone_pubkey + device label (endpoint is rate-limited)
     API->>API: hash(code) matches, unused, not expired → mark used; enrollment = PENDING
-    Admin->>Dash: approve enrollment
-    API->>Signer: sign grant(user, pubkey, gate, now, now + member validity)
-    Signer-->>API: grant
+    App-->>Admin: shows 6-digit key fingerprint
+    Dash-->>Admin: shows the same fingerprint on the pending request
+    Admin->>Admin: compares the digits with the person in front of them
+    Admin->>Dash: approve (until <end date>) and confirm with passkey
+    Dash->>API: approval record + WebAuthn assertion
+    API->>Signer: approval record + assertion
+    Signer->>Signer: verify assertion against pinned admin key; store approval; alert admins
     App->>API: fetch grant (request signed with the phone key)
+    API->>Signer: grant request
+    Signer-->>API: grant (within the approval's limits)
     API-->>App: grant
 ```
+
+**Key fingerprint (stops enrollment hijacking).** An invite code can leak: shoulder-surfing, a forwarded message. Whoever uses it first enrolls *their* phone. So the app shows a 6-digit fingerprint, `first 20 bits of SHA-256(phone_pubkey)` written as 6 decimal digits, and the dashboard shows the same digits on the pending request. The admin approves only after the digits match the phone of the person in front of them. Invite codes are random with at least 40 bits of entropy (e.g. 8 characters of Crockford base32), single-use, and expire after 48 h. The enroll endpoint is rate-limited.
+
+**Admin approval (stops a compromised backend from minting access).** Approving creates an **approval record**:
+
+| Field | Notes |
+|---|---|
+| `approval_id` | Random 16 bytes |
+| `user_id`, `phone_pubkey`, `gate_id`, `kind` | Who, which phone, which gate, member or guest |
+| `approved_until` | The end of this person's access: e.g. end of semester for members, the last day for guests |
+| `admin_key_id` | Which pinned admin passkey signed it |
+
+The dashboard asks the admin's passkey to sign it: a **WebAuthn assertion whose challenge is `SHA-256("AGv1-APPROVE" ‖ record)`**. The signer checks the assertion against the admin public keys **pinned in its own config**. It never takes the API's or the DB's word for who is approved. Only then does it store the approval (in its own store) and alert the admins.
+
+From then on the signer issues grants for that phone **by itself**, each with `valid_until = min(now + grant lifetime (D5), approved_until)`, until the approval ends or is revoked. Refresh stays automatic, and nobody can get a grant without an admin's passkey having approved that exact phone.
 
 ### 7.2 Unlock (at the gate, can be offline)
 
@@ -243,7 +267,7 @@ sequenceDiagram
 5. Every outcome is logged (§6.4).
 
 ### 7.3 Guest access
-The admin creates a **guest invite**, and the guest enrolls with the app the same way. The grant is `kind = guest` and expires after hours or days instead of weeks. No other mechanism is needed. Guests without a smartphone are out of scope; they use the physical key or are let in by a member.
+The admin creates a **guest invite**, and the guest enrolls with the app the same way, including the fingerprint check and the passkey approval. The approval is `kind = guest` with an `approved_until` of hours or days instead of a semester. No other mechanism is needed. Guests without a smartphone are out of scope; they use the physical key or are let in by a member.
 
 ### 7.4 Revocation
 - **Removing someone:** the admin clicks revoke. The backend marks the user, stops refreshing their grant, adds the grant to the revocation list and bumps its version. The signer re-signs the list.
@@ -251,7 +275,7 @@ The admin creates a **guest invite**, and the guest enrolls with the app the sam
 - **Offline limit:** if the gate is offline, a revoked grant still works until the earlier of (a) the gate's next successful pull or (b) the grant's `valid_until`. **Short member grants that refresh automatically put a hard ceiling on this**: with 7-day grants, a revoked member is locked out within 7 days at most, even if the gate never comes back online. The length is decision D5.
 
 ### 7.5 Grant refresh
-While the phone is online, the app asks for a new grant when the current one has less than about half its life left. The request is signed with the phone key; the server checks that the user is active and the device isn't revoked. Members never have to do anything by hand.
+While the phone is online, the app asks for a new grant when the current one has less than about half its life left. The request is signed with the phone key over a fresh server nonce, so a captured request can't be replayed. The **signer** (not the API) checks that a valid, unrevoked approval exists for that phone, and caps the grant at `approved_until`. Members never have to do anything by hand.
 
 ### 7.6 Time
 - The DS3231 RTC keeps time when power or network is off.
@@ -329,7 +353,10 @@ A build flag `GATE_MODE_MOCK` turns on the ≤ 1-hour grant limit and a "MOCK" s
 | **Fake backend / DNS spoof** | TLS checked against the stored CA certificate. The revocation list is also signed by the signer, so a fake server can't remove a revocation. |
 | **Bluetooth DoS** (hold the connection, flood bad attempts) | Idle timeout plus per-connection rate limit. Remaining effect is a nuisance only; the physical key still works. |
 | **Relay attack** (attacker passes messages between a member's phone and the gate) | ⚠️ **Not fully solvable with these rules.** The gate can't prove its identity without holding a private key, and that's forbidden. Mitigations: decision D2 (require the phone to be unlocked or recently used, or a tap in the app), binding signatures to `gate_id`, and short grants. Recorded as an accepted residual risk. |
-| **Signer key compromise** | Full access to the gate. That's why it's the only critical secret; protecting it is decision D4. Recovery: new signer key, reprovision the ESP's public key, re-issue all grants. |
+| **Signer key compromise** | Full access to the gate. That's why it's one of only two critical secrets; protecting it is decision D4. Recovery: new signer key, reprovision the ESP's public key, re-issue all grants. |
+| **Backend / API / DB compromise** | **No access.** The signer issues grants only within approvals signed by a pinned admin passkey, and never trusts the DB for who is approved. The attacker can deny service (refuse refreshes, add revocations) and read user records and logs. |
+| **Admin passkey compromise** | An attacker could approve their own phone. Mitigations: passkeys can't be exported from the admin's device, every new approval alerts all admins, and approvals show up on the dashboard. Recovery: remove that key from the signer config and revoke what it approved. |
+| **Intercepted invite code** | The attacker can enroll their phone, but the admin won't approve it, because the 6-digit key fingerprint won't match the real person's phone (§7.1). |
 | **Log says "phone", not "person"** | By design: a log entry means "this grant opened the gate". Tailgating and shared phones aren't detected. An optional reed switch confirms the gate actually opened. |
 | **Physical attack on wiring** | Out of scope for software. The hard rule says relay and ESP wiring must not be reachable from outside. |
 
@@ -381,8 +408,8 @@ The step-by-step version is the separate cutover-checklist deliverable.
 |---|---|---|---|
 | **D1** | Phone platform | Android · iOS · both | **Android first.** Background BLE scanning works reliably with a foreground service, and it reuses the existing Kotlin code. It can be distributed as an APK or through Play internal testing (one-time $25). iOS restricts background BLE, and distribution needs a $99/yr developer account; free signing expires every 7 days. **Check what phones the members actually have first.** |
 | **D2** | How a background unlock happens | (a) fully automatic, even with the phone locked · (b) only when the phone is unlocked or was used in the last N seconds · (c) only after a tap in the app or notification | **(b).** It blocks a silent relay attack on a phone sitting in a pocket and is still nearly hands-free. Android: key limited to use after recent authentication. iOS: Secure Enclave key usable only while the phone is unlocked. |
-| **D3** | Backend stack | Supabase (Postgres, row-level security, TOTP MFA, edge functions) · Cloudflare Workers + D1 · Firebase | **Supabase.** Insert-only row-level security is a natural fit for append-only logs, auth with MFA is built in, there's a free tier for the throwaway Phase A account, and the project can be recreated under the club account for Phase B. |
-| **D4** | Where the Phase B signer private key lives | Backend environment secret · cloud KMS (key can't be exported; signs over API) · offline on the admin's laptop | **Cloud KMS** (e.g. GCP or AWS KMS with P-256 signing). The key can't be stolen even if the backend is fully compromised. An environment secret is simpler but weaker. Offline is strongest but blocks automatic grant refresh. |
+| **D3** | Backend stack | Supabase (Postgres, row-level security, TOTP MFA, edge functions) · Cloudflare Workers + D1 · Firebase | **Supabase.** Insert-only row-level security is a natural fit for append-only logs, there's a free tier for the throwaway Phase A account, and the project can be recreated under the club account for Phase B. Whatever the stack, admin passkey assertions are verified by the **signer** with a standard WebAuthn library, so the stack's own login isn't what protects access. |
+| **D4** | Where the Phase B signer private key lives | Backend environment secret · cloud KMS (key can't be exported; signs over API) · offline on the admin's laptop | **Cloud KMS** (e.g. GCP or AWS KMS with P-256 signing). The key can't be stolen even if the backend is fully compromised. KMS alone doesn't stop *misuse* by a compromised backend; the admin-passkey approvals (§7.1) do. An environment secret is simpler but weaker. Offline is strongest but blocks automatic grant refresh. |
 | **D5** | Grant lifetimes | | Member **7 days** (auto-refresh). Guest: **set per invite**, maximum 7 days. Mock: **≤ 1 h**, enforced by the firmware. |
 | **D6** | Revocation-list pull interval, and what happens if the list is stale | | Pull every **5 min**. A stale list doesn't block valid grants (keeps the gate available); short grants limit the risk. Show the gate's last sync time on the dashboard. |
 | **D7** | Firmware toolchain | Arduino IDE · arduino-cli · PlatformIO | **PlatformIO.** Pinned library versions and repeatable CI builds. |
