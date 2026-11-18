@@ -46,6 +46,131 @@ The schematic is generated from code with [schemdraw](https://schemdraw.readthed
 
 ---
 
+## Security and cryptography
+
+The design assumes **everything in this repo is public**: the code, the protocol, the formats. The security comes only from private keys that never appear here. If this section and [docs/design.md](docs/design.md) ever disagree, the design doc wins. Values marked *(D#)* are proposals that are still open decisions.
+
+### Algorithms
+
+| What | Choice | Why |
+|---|---|---|
+| Signatures (phones and signer) | **ECDSA P-256** (secp256r1) with **SHA-256** | The only curve that is hardware-backed on both Android Keystore and the iOS Secure Enclave. The ESP32's bundled mbedTLS verifies it. One algorithm means one way to verify, which keeps the code small to review. |
+| Phone private key | Generated **inside** Android Keystore (StrongBox if available) / iOS Secure Enclave, **can't be exported** | The key can't be copied off the phone, even by the app itself. |
+| Gate crypto library | **mbedTLS** (ships with the ESP32 core) | Standard, maintained library. No hand-rolled crypto. |
+| Challenge nonce | **32 bytes** from the ESP32 **hardware RNG**, single-use, expires after **10 s** | Makes every unlock unique, so recordings can't be replayed. |
+| Gate ↔ backend | **HTTPS**, outbound only, server certificate checked against a **stored CA certificate** | No open ports on the gate. A fake server can't impersonate the backend. |
+| Invite codes | Random, one-time, expire after 48 h, stored only as **SHA-256(code)** | A database leak doesn't reveal usable codes. |
+| Domain separation | Every signed message starts with a tag: `AGv1-GRANT`, `AGv1-AUTH`, `AGv1-RVK` | A signature made for one purpose can't be reused for another. |
+
+**Encoding:**
+- **Public keys:** uncompressed P-256 points (65 bytes, `0x04‖X‖Y`).
+- **Signer signatures:** raw `r‖s` (64 bytes).
+- **Phone signatures:** DER (≤ 72 bytes), which is what the phone keystores produce natively.
+- **Integers:** big-endian. **Times:** Unix seconds as `u32`.
+
+### Keys: who holds what
+
+| Key / secret | Held by | If it leaks |
+|---|---|---|
+| **Signer private key** | Signer service only *(storage: D4, proposal: cloud KMS)* | **Full access.** This is the only critical secret. Recovery: new signer key, reprovision the gate, re-issue all grants. |
+| Signer public key | Gate (NVS) + backend | Nothing. It's public. |
+| Phone private key | That phone's security chip, can't be exported | Only that one phone's access. Revoke it. |
+| Grant | Phone (ordinary storage) | Nothing. It's useless without the matching phone private key. |
+| Invite code | The invited person, once | Someone else could enroll in their place, but an admin still has to approve. Expires in 48 h. |
+| Gate log token | Gate (NVS) | Can only **add** log rows. Fake rows show up as sequence-number conflicts. It can't read logs or open anything. |
+| WiFi password | Gate (NVS) | WiFi access only. |
+| Backend credentials | Backend environment secrets | Database access. Grants still need the signer key. |
+
+**The gate holds no secret that can open the gate.** Device-specific values are written into the ESP32's NVS storage at provisioning time and are never compiled into the firmware. A leaked firmware binary gives away nothing.
+
+### The grant (175 bytes)
+
+A grant is the signer's signed statement that a particular phone may open a particular gate for a particular time window.
+
+| Field | Bytes | |
+|---|---|---|
+| `version` | 1 | `0x01` |
+| `grant_id` | 16 | Random. This is what gets revoked and logged. |
+| `user_id` | 16 | |
+| `gate_id` | 4 | Only valid on this gate |
+| `kind` | 1 | member / guest / admin-test |
+| `valid_from` | 4 | |
+| `valid_until` | 4 | Member 7 days with automatic refresh; guest set per invite; mock ≤ 1 h *(D5)* |
+| `phone_pubkey` | 65 | The phone that's allowed to use this grant |
+| `signer_sig` | 64 | ECDSA over `"AGv1-GRANT" ‖ all fields above` |
+
+### The unlock exchange (BLE)
+
+```
+Phone                                            Gate (ESP32)
+  │ ── HELLO ─────────────────────────────────────▶ │
+  │ ◀──────────────── nonce (32 B) ‖ gate_id (4 B) ─ │   new random nonce, 10 s TTL
+  │                                                  │
+  │  phone_sig = ECDSA(phone_key,                    │
+  │      "AGv1-AUTH" ‖ gate_id ‖ nonce ‖ grant_id)   │
+  │                                                  │
+  │ ── grant (175 B) ‖ phone_sig (≤72 B) ─────────▶ │   checks below, all offline
+  │ ◀───────────────────────── result ‖ reason code ─ │   relay pulses on OK
+```
+
+Bluetooth signal strength only **triggers** the exchange; it never decides anything. If the handshake isn't done within about 5 s, the gate drops the connection. Rate limits are per connection, so a stranger can't lock everyone out.
+
+### What the gate checks, in order (cheapest first)
+
+1. Format and version: `BAD_FORMAT`
+2. `gate_id` matches this gate: `WRONG_GATE`
+3. Clock is valid (DS3231 RTC set): `CLOCK_INVALID`
+4. `valid_from ≤ now ≤ valid_until`: `NOT_YET_VALID` / `EXPIRED`
+5. *(mock builds only)* grant lasts ≤ 1 hour: `GRANT_TOO_LONG`
+6. `grant_id` isn't on the revocation list: `REVOKED`
+7. Signer signature on the grant is valid: `BAD_GRANT_SIG`
+8. Phone signature on `gate_id ‖ nonce ‖ grant_id`, checked with the grant's `phone_pubkey`: `BAD_PHONE_SIG`
+9. All checks pass: **open** (`OK`)
+
+The cheap checks come first, so junk is rejected before the gate spends time on the slow P-256 signature checks.
+
+### Revocation
+
+- The signer publishes a **signed revocation list**: `version ‖ issued_at ‖ gate_id ‖ count ‖ grant_ids[] ‖ signer_sig` (tag `AGv1-RVK`).
+- The gate pulls it over HTTPS every **5 min** *(D6)* and keeps the newest one in NVS.
+- **The version must always increase.** The gate rejects any list whose version is lower than or equal to the one it has, so an old list can't be replayed to bring a revoked grant back.
+- A fake server can't change the list either, because it's signed by the signer, not just sent over TLS.
+- **Offline limit:** if the gate can't reach the backend, a revoked grant still works until its `valid_until`. That's why member grants are short (7 days) and refresh automatically.
+
+### Access log
+
+- Every attempt is logged, allowed or denied: `seq ‖ gate_id ‖ timestamp ‖ grant_id ‖ user_id ‖ result ‖ reason`.
+- `user_id` comes only from a **verified** grant, never from what the phone claims.
+- Events are buffered in a **flash ring buffer** and uploaded over HTTPS when online, so logs survive WiFi outages.
+- `seq` increases per gate and is never reused, so **gaps reveal dropped or deleted events.**
+- The server stores logs **append-only**. The gate's token can only insert, and nothing can update or delete except the 90-day retention job.
+- Timestamps come from the **DS3231 RTC**, synced over HTTPS. If the clock isn't set and there's no network, the gate denies (and the inside button and mechanical key still work).
+- A log entry means "this grant opened the gate", not "this person walked in". Tailgating and shared phones aren't detected.
+
+### Threats at a glance
+
+| Attack | Outcome |
+|---|---|
+| Replay a recorded unlock | ❌ Fails: the nonce is single-use, expires in 10 s, and is covered by the signature |
+| Copy someone's grant | ❌ Useless without their phone's private key |
+| Dump the ESP32's flash | ❌ No way to open the gate: only public keys, the WiFi password and the log token |
+| Read this repo | ❌ Nothing gained: there are no secrets in it by design |
+| Old revocation list / fake backend | ❌ The version must increase, and the list is signed |
+| Bluetooth flooding / holding the connection | ⚠️ Nuisance only: idle timeout and per-connection limits; the physical key still works |
+| Stolen phone | ⚠️ Revoke it; locked out at the next sync, or by grant expiry at the latest. Unlock may require the phone to be unlocked *(D2)* |
+| **Relay attack** (forwarding messages between a member's phone and the gate) | ⚠️ **Accepted residual risk.** The gate can't prove its identity without holding a private key. Reduced by requiring the phone to be unlocked or recently used *(D2)* |
+| **Signer key compromise** | 🚨 Full access. That's why it lives in KMS *(D4)* |
+| Power cut / crash | ✅ The relay must start off; a dead relay = button not pressed |
+
+The full threat list is a Phase A deliverable: [docs/threats.md](docs/threats.md).
+
+### Mock vs production
+
+- **Phase A** uses a **throwaway signer key** (held by one named person, never in the repo or chat), a throwaway backend, and firmware that rejects grants longer than ~1 hour.
+- **Phase B** swaps in the production signer key, backend and gate config, **with no code changes**, and turns on ESP32 **secure boot and flash encryption** to protect the NVS values.
+
+---
+
 ## Repo layout
 
 | Folder | What goes there |
