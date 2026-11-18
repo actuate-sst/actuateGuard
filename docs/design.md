@@ -128,7 +128,7 @@ Encoding:
 - **Signer signatures:** raw `r || s`, 64 bytes, fixed size.
 - **Phone signatures:** DER, because that's what Keystore and the Secure Enclave produce. The ESP checks them with `mbedtls_pk_verify`.
 
-**Domain separation:** every signed message starts with a fixed tag (`"AGv1-GRANT"`, `"AGv1-AUTH"`, `"AGv1-RVK"`, and `"AGv1-APPROVE"` for admin approvals). That way a signature made for one purpose can't be reused for another.
+**Domain separation:** every signed message starts with a fixed tag (`"AGv1-GRANT"`, `"AGv1-AUTH"`, `"AGv1-RVK"`, `"AGv1-TIME"`, and `"AGv1-APPROVE"` for admin approvals). That way a signature made for one purpose can't be reused for another.
 
 **Admin passkeys** are WebAuthn credentials (P-256, ES256) on the admin's own device. The signer verifies their assertions with a standard WebAuthn library, never hand-written parsing.
 
@@ -277,19 +277,24 @@ The admin creates a **guest invite**, and the guest enrolls with the app the sam
 - **Removing someone:** the admin clicks revoke and confirms with their passkey. The signer marks the approval revoked (so it issues no more grants), adds a `user_id` entry (whole person) or the phone's unexpired `grant_id`s (one phone), bumps the version and re-signs the list. The API can *request* revocations, but only the signer writes the list.
 - **Gate update:** the gate pulls the list over HTTPS every N minutes (proposed 5) and keeps the newest valid one in NVS.
 - **Offline limit:** if the gate is offline, a revoked grant still works until the earlier of (a) the gate's next successful pull or (b) the grant's `valid_until`. **Short member grants that refresh automatically put a hard ceiling on this**: with 7-day grants, a revoked member is locked out within 7 days at most, even if the gate never comes back online. The length is decision D5.
+- **Blocking the gate's internet is an attack, not just an outage.** A revoked person could jam the WiFi or block DNS so the gate never sees the new list. Defences: the dashboard shows each gate's last sync and **alerts the admins when a gate has been offline for more than 1 hour**, and shorter grants (D5) shrink the window.
 
 ### 7.5 Grant refresh
 While the phone is online, the app asks for a new grant when the current one has less than about half its life left. The request is signed with the phone key over a fresh server nonce, so a captured request can't be replayed. The **signer** (not the API) checks that a valid, unrevoked approval exists for that phone, and caps the grant at `approved_until`. Members never have to do anything by hand.
 
 ### 7.6 Time
 - The DS3231 RTC keeps time when power or network is off.
-- The gate syncs it from the backend's `/time` endpoint over HTTPS, checked against the stored CA certificate.
+- **Signed time sync:** the gate sends a fresh 16-byte nonce to `/time`. The signer replies with `time ‖ nonce`, signed with the signer key (tag `"AGv1-TIME"`), using **its own clock**, not anything the API passes in. The gate checks the signature and the nonce. Since the answer is signed, it can be trusted even when the RTC is unset and the TLS certificate dates can't be checked yet (the chicken-and-egg problem).
+- **Time floor:** the gate stores the last trusted time in NVS and **never accepts a time more than 2 minutes earlier**. A compromised backend, or a pulled RTC battery, can't wind the clock back to bring expired grants back to life.
+- **Drift tolerance:** grant windows are checked with ±2 minutes of slack, so normal RTC drift doesn't lock people out.
 - If the RTC shows an invalid time (battery dead, year < 2026) and there's no network, the gate denies with `CLOCK_INVALID` and logs it. People still get in with the physical key or the inside release, so this fails safe.
 
 ### 7.7 Log upload
 - Events go to a ring buffer in flash (proposed: last 2,000 events), with `seq` numbers.
 - When online, the gate posts batches over HTTPS using the write-only token. The server confirms up to a `seq`, and the gate frees those entries.
 - The server stores events append-only: the token's database role can only `INSERT`, and no role can `UPDATE` or `DELETE` except a scheduled 90-day retention job.
+- **Conflicts are kept, never dropped.** If two rows arrive with the same `(gate_id, seq)`, the server stores **both** and flags the conflict on the dashboard. Otherwise someone with a leaked token could pre-fill future `seq` numbers with junk and make the gate's real events get rejected as duplicates.
+- **Each gate has its own token**, which can be rotated from the dashboard, and inserts are rate-limited per token.
 
 ---
 
@@ -308,7 +313,7 @@ firmware/
       verify.*          mbedTLS ECDSA wrappers, the only place crypto is called
       revocation.*      signed list, version check, NVS storage
     relay.*             fail-safe relay control (§8.2)
-    clock.*             DS3231 + HTTPS time sync
+    clock.*             DS3231 + signed time sync + time floor
     log_buffer.*        flash ring buffer + seq
     uploader.*          HTTPS log upload + revocation pull + time sync
 ```
@@ -353,6 +358,9 @@ A build flag `GATE_MODE_MOCK` turns on the ≤ 1-hour grant limit and a "MOCK" s
 | **Stolen phone** | Admin revokes it; locked out at the next gate sync, or by grant expiry at the latest. Decision D2 decides whether a locked stolen phone can be used at all. |
 | **Expired grant** | Rejected offline by the RTC check. |
 | **Tampered log** | The token can only append. `seq` gaps reveal deleted or blocked events. The DB doesn't allow updates. |
+| **Fake log rows from a leaked token** | They can't push out real events: `seq` conflicts are stored and flagged, never dropped. Rotate the gate's token. |
+| **Clock wound back** (fake time, pulled RTC battery) | Rejected: time sync is signed by the signer and checked against a fresh nonce, and the gate never accepts a time earlier than its stored floor. |
+| **Gate's internet blocked** to dodge a revocation | Works only until the grant expires (D5). Admins are alerted when a gate has been offline for more than 1 h. |
 | **Old revocation list replayed** | Rejected: the version must always increase. |
 | **Revoked person uses their older grant** | Blocked: revoking a person adds their `user_id`, which covers every grant they hold, not just the newest. |
 | **Fake backend / DNS spoof** | TLS checked against the stored CA certificate. The revocation list is also signed by the signer, so a fake server can't remove a revocation. |
@@ -415,7 +423,7 @@ The step-by-step version is the separate cutover-checklist deliverable.
 | **D2** | How a background unlock happens | (a) fully automatic, even with the phone locked · (b) only when the phone is unlocked or was used in the last N seconds · (c) only after a tap in the app or notification | **(b).** It blocks a silent relay attack on a phone sitting in a pocket and is still nearly hands-free. Android: key limited to use after recent authentication. iOS: Secure Enclave key usable only while the phone is unlocked. |
 | **D3** | Backend stack | Supabase (Postgres, row-level security, TOTP MFA, edge functions) · Cloudflare Workers + D1 · Firebase | **Supabase.** Insert-only row-level security is a natural fit for append-only logs, there's a free tier for the throwaway Phase A account, and the project can be recreated under the club account for Phase B. Whatever the stack, admin passkey assertions are verified by the **signer** with a standard WebAuthn library, so the stack's own login isn't what protects access. |
 | **D4** | Where the Phase B signer private key lives | Backend environment secret · cloud KMS (key can't be exported; signs over API) · offline on the admin's laptop | **Cloud KMS** (e.g. GCP or AWS KMS with P-256 signing). The key can't be stolen even if the backend is fully compromised. KMS alone doesn't stop *misuse* by a compromised backend; the admin-passkey approvals (§7.1) do. An environment secret is simpler but weaker. Offline is strongest but blocks automatic grant refresh. |
-| **D5** | Grant lifetimes | | Member **7 days** (auto-refresh). Guest: **set per invite**, maximum 7 days. Mock: **≤ 1 h**, enforced by the firmware. |
-| **D6** | Revocation-list pull interval, and what happens if the list is stale | | Pull every **5 min**. A stale list doesn't block valid grants (keeps the gate available); short grants limit the risk. Show the gate's last sync time on the dashboard. |
+| **D5** | Grant lifetimes | Member 7 days · Member 24–72 h | Member **7 days** (auto-refresh) for now. **24–72 h is tighter:** it caps how long a revoked person can keep getting in while the gate is offline or its internet is blocked, but phones must come online to refresh that often. Guest: **set per invite**, maximum 7 days, never past `approved_until`. Mock: **≤ 1 h**, enforced by the firmware. |
+| **D6** | Revocation-list pull interval, and what happens if the list is stale | | Pull every **5 min**. A stale list doesn't block valid grants (keeps the gate available); short grants limit the risk. The dashboard shows each gate's last sync and alerts the admins after 1 h offline. |
 | **D7** | Firmware toolchain | Arduino IDE · arduino-cli · PlatformIO | **PlatformIO.** Pinned library versions and repeatable CI builds. |
 | **D8** | Reed switch | Phase A · later | **Later (optional).** The log design already supports a `GATE_OPENED` event. |
